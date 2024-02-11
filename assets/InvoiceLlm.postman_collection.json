@@ -1,0 +1,97 @@
+{
+	"info": {
+		"_postman_id": "4b705f3b-7092-4b99-a312-727ee07e4d61",
+		"name": "InvoiceLlm",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_exporter_id": "471874"
+	},
+	"item": [
+		{
+			"name": "ReconcileLlm - Localhost",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\r\n    \"isLocal\": true,\r\n    \"loanNumber\": \"4000835968\"\r\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:7071/api/ReconcileLlm",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "7071",
+					"path": [
+						"api",
+						"ReconcileLlm"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Reconcile - Localhost",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\r\n    \"isLocal\": true,\r\n    \"loanNumber\": \"4000835968\"\r\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:7071/api/Reconcile",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "7071",
+					"path": [
+						"api",
+						"Reconcile"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Analyze Invoice - Localhost",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\r\n    \"isLocal\": true,\r\n    \"loanNumber\": \"4000835968\",\r\n    \"excelSource\": \"4000835968.xlsx\",\r\n    \"corpAdvSource\": \"CORPADV\",\r\n    \"invSource\": \"INVOICE\"\r\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:7071/api/AnalyzeInvoice",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "7071",
+					"path": [
+						"api",
+						"AnalyzeInvoice"
+					]
+				}
+			},
+			"response": []
+		}
+	]
+}

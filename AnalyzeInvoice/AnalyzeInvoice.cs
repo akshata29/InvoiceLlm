@@ -5,10 +5,7 @@ using Azure.AI.FormRecognizer.DocumentAnalysis;
 using Azure.Storage.Blobs;
 using InvoiceLlm.Helper;
 using FromBodyAttribute = Microsoft.Azure.Functions.Worker.Http.FromBodyAttribute;
-using Polly;
 using Azure;
-using System.Net;
-using System.Text.Json;
 using System.Text;
 using Newtonsoft.Json;  
 using NPOI.SS.UserModel;  
@@ -174,12 +171,8 @@ namespace InvoiceLlm
             }
             return json;
         }
-        private async Task<bool> AnalyzeInvoiceRecognition(bool isLocal, string loanNumber, string excelSource, string corpAdvSource, string invSource)
+        private void processExcelFile(bool isLocal, string loanNumber, string excelSource)
         {
-            _logger.LogInformation($"Processing loan '{loanNumber}'");
-            _logger.LogInformation($"Processing excel source '{excelSource}'");
-            _logger.LogInformation($"Processing corporate advance source '{corpAdvSource}'");
-            _logger.LogInformation($"Processing invoice source '{invSource}'");
             if (isLocal)
             {
                 // Read the excel source file from local directory
@@ -193,7 +186,51 @@ namespace InvoiceLlm
                 string jsonFilePath = string.Concat(Directory.GetParent(Environment.CurrentDirectory)?.Parent?.Parent?.FullName, Settings.LocalSourceDirectory, loanNumber, "\\", loanNumber, ".json");
                 _logger.LogInformation($"Saving JSON to file '{jsonFilePath}'");
                 File.WriteAllText(jsonFilePath, excelJson);
+            } 
+            else
+            {
+                // Read the excel source file from blob storage
+                // Read the excel source file from the Folder within the container
+                var blobName = string.Concat(loanNumber, "/", excelSource);
+                var excelBlob = sourceContainerClient.GetBlobClient(blobName);
+                _logger.LogInformation($"Processing excel file '{excelBlob.Uri}'");
 
+                Directory.CreateDirectory(Path.GetTempPath() + loanNumber);
+                var excelFilePath = Path.GetTempPath() + loanNumber + "\\" + excelSource;
+
+                excelBlob.DownloadTo(excelFilePath);
+                // Convert the excel file to JSON
+                string excelJson = ExcelToJsonConverter(excelFilePath, "Advances");
+
+                // Save the JSON to a blob
+                var jsonBlobName = string.Concat(loanNumber, "/", loanNumber, ".json");
+                var blobClient = processedContainerClient.GetBlobClient(jsonBlobName);
+                using (var stream = new MemoryStream(Encoding.UTF8.GetBytes(excelJson)))
+                {
+                    blobClient.Upload(stream, true);
+                }
+            }
+        }
+        private async Task<string>  processInvoice(Stream stream)
+        {
+            var formRecognizerClient = GetFormRecognizerClient(0);
+            AnalyzeDocumentOperation operation = await formRecognizerClient.AnalyzeDocumentAsync(WaitUntil.Completed, 
+                Settings.InvoiceProcessingModel, stream);
+            var response = await operation.WaitForCompletionAsync();
+            string frJson = response.GetRawResponse().Content.ToString();
+            //AnalyzeResult result = operation.Value;
+            return frJson;
+        }
+        private async Task<bool> AnalyzeInvoiceRecognition(bool isLocal, string loanNumber, string excelSource, string corpAdvSource, string invSource)
+        {
+            _logger.LogInformation($"Processing loan '{loanNumber}'");
+            _logger.LogInformation($"Processing excel source '{excelSource}'");
+            _logger.LogInformation($"Processing corporate advance source '{corpAdvSource}'");
+            _logger.LogInformation($"Processing invoice source '{invSource}'");
+
+            processExcelFile(isLocal, loanNumber, excelSource);
+            if (isLocal)
+            {
                 // Read the corporate advance source file(s) from local directory
                 string corpAdvFilePath = string.Concat(Directory.GetParent(Environment.CurrentDirectory)?.Parent?.Parent?.FullName, Settings.LocalSourceDirectory, loanNumber, "\\", corpAdvSource);
                 // Read all the corporate advance source files from the directory
@@ -211,14 +248,8 @@ namespace InvoiceLlm
                     _logger.LogInformation($"Processing corporate advance file '{corpAdvFile}'");
                     try
                     {
-                        var formRecognizerClient = GetFormRecognizerClient(0);
                         using var stream = new FileStream(corpAdvFile, FileMode.Open);
-
-                        AnalyzeDocumentOperation operation = await formRecognizerClient.AnalyzeDocumentAsync(WaitUntil.Completed, 
-                            Settings.InvoiceProcessingModel, stream);
-                        var response = await operation.WaitForCompletionAsync();
-                        string frJson = response.GetRawResponse().Content.ToString();
-                        AnalyzeResult result = operation.Value;
+                        string frJson = await processInvoice(stream);
                         // Save the output to a file
                         string outputFilePath = string.Concat(Directory.GetParent(Environment.CurrentDirectory)?.Parent?.Parent?.FullName, Settings.LocalSourceDirectory, loanNumber, "\\", corpAdvSource, "\\", Path.GetFileNameWithoutExtension(corpAdvFile), ".json");
                         _logger.LogInformation($"Saving JSON to file '{outputFilePath}'");
@@ -242,7 +273,6 @@ namespace InvoiceLlm
                         _logger.LogError($"Failed to process file at URL:{corpAdvFiles}. {exe.ToString()}");
                         return false;
                     }
-
                 }
 
                 // Read the Invoice source file(s) from local directory
@@ -262,15 +292,8 @@ namespace InvoiceLlm
                     _logger.LogInformation($"Processing Invoice file '{invFile}'");
                     try
                     {
-                        var formRecognizerClient = GetFormRecognizerClient(0);
                         using var stream = new FileStream(invFile, FileMode.Open);
-
-                        AnalyzeDocumentOperation operation = await formRecognizerClient.AnalyzeDocumentAsync(WaitUntil.Completed, 
-                            Settings.InvoiceProcessingModel, stream);
-                        AnalyzeResult result = operation.Value;
-                        var response = await operation.WaitForCompletionAsync();
-                        string frJson = response.GetRawResponse().Content.ToString();
-
+                        string frJson = await processInvoice(stream);
                         _logger.LogInformation($"Completed Analyze '{invFile}'");
 
                         // Save the output to a file
@@ -298,80 +321,107 @@ namespace InvoiceLlm
                     }
 
                 }
-
                 return true;
             }
             else
             {
-                // Random jitterier = new();
-                // CancellationTokenSource source = new CancellationTokenSource();
-                // try
-                // {
-                //     var formRecognizerClient = GetFormRecognizerClient(0);
+                // Get the list of all the blobs in the container and in the specific folder
+                //var blobItems = sourceContainerClient.GetBlobsByHierarchy(prefix: loanNumber + "/" + corpAdvSource);
+                var blobItems = sourceContainerClient.GetBlobs(prefix: loanNumber + "/" + corpAdvSource);
+                foreach (var blob in blobItems)
+                {
+                    if (blob.Name.EndsWith(".pdf"))
+                    {
+                        try
+                        {   
+                            var destinationBlobName = string.Concat(loanNumber, "/", corpAdvSource, "/", Path.GetFileNameWithoutExtension(blob.Name) + ".json");
+                            // Check if the file already exists in the source container
+                            var existingBlob = sourceContainerClient.GetBlobClient(destinationBlobName);
+                            if (existingBlob.Exists())
+                            {
+                                _logger.LogInformation($"Skipping processing of corporate advance file '{blob.Name}' as JSON already exists");
+                                continue;
+                            }
+                            _logger.LogInformation($"Processing corporate advance file '{blob.Name}'");
 
-                //     //Retry policy to back off if too many calls are made to the Form Recognizer
-                //     var retryPolicy = Policy.Handle<RequestFailedException>(e => e.Status == (int)HttpStatusCode.TooManyRequests)
-                //         .WaitAndRetryAsync(5, retryAttempt => TimeSpan.FromSeconds(retryAttempt++) + TimeSpan.FromMilliseconds(jitterier.Next(0, 1000)));
+                            // Read the blob stream
+                            var blobStream = sourceContainerClient.GetBlobClient(blob.Name).OpenRead();
+                            string frJson = await processInvoice(blobStream);
 
-                //     AnalyzeDocumentOperation operation = null;
+                            // Save the output to a blob
+                            using (var stream = new MemoryStream(Encoding.UTF8.GetBytes(frJson)))
+                            {
+                                existingBlob.Upload(stream, true);
+                            }
+                        }
+                        catch (Azure.RequestFailedException are)
+                        {
+                            if (are.ErrorCode == "InvalidRequest")
+                            {
+                                _logger.LogError($"Failed to process file at URL:{blob.Name}. You may need to set permissions from the Form Recognizer to access your storage account. {are.ToString()}");
+                            }
+                            else
+                            {
+                                _logger.LogError($"Failed to process file at URL:{blob.Name}. {are.ToString()}");
+                            }
+                            return false;
+                        }
+                        catch (Exception exe)
+                        {
 
-                //     var pollyResult = await retryPolicy.ExecuteAndCaptureAsync(async token =>
-                //     {
-                //         operation = await formRecognizerClient.AnalyzeDocumentFromUriAsync(WaitUntil.Started, Settings.InvoiceProcessingModel, fileUri);
-                //     }, source.Token);
+                            _logger.LogError($"Failed to process file at URL:{blob.Name}. {exe.ToString()}");
+                            return false;
+                        }
+                    }
+                }
 
+                var invBlobItems = sourceContainerClient.GetBlobs(prefix: loanNumber + "/" + invSource);
+                foreach (var invBlob in invBlobItems)
+                {
+                    if (invBlob.Name.EndsWith(".pdf"))
+                    {
+                        try
+                        {   
+                            var destinationBlobName = string.Concat(loanNumber, "/", invSource, "/", Path.GetFileNameWithoutExtension(invBlob.Name) + ".json");
+                            // Check if the file already exists in the source container
+                            var existingBlob = sourceContainerClient.GetBlobClient(destinationBlobName);
+                            if (existingBlob.Exists())
+                            {
+                                _logger.LogInformation($"Skipping processing of corporate advance file '{invBlob.Name}' as JSON already exists");
+                                continue;
+                            }
+                            _logger.LogInformation($"Processing corporate advance file '{invBlob.Name}'");
 
-                //     if (pollyResult.Outcome == OutcomeType.Failure)
-                //     {
-                //         _logger.LogError($"Policy retries failed for {fileUri}. Resulting exception: {pollyResult.FinalException}");
-                //         return false;
-                //     }
+                            // Read the blob stream
+                            var blobStream = sourceContainerClient.GetBlobClient(invBlob.Name).OpenRead();
+                            string frJson = await processInvoice(blobStream);
 
-                //     //Using this sleep vs. operation.WaitForCompletion() to avoid over loading the endpoint
-                //     do
-                //     {
-                //         System.Threading.Thread.Sleep(2000);
-                //         await retryPolicy.ExecuteAndCaptureAsync(async token =>
-                //         {
-                //             await operation.UpdateStatusAsync();
-                //         }, source.Token);
+                            // Save the output to a blob
+                            using (var stream = new MemoryStream(Encoding.UTF8.GetBytes(frJson)))
+                            {
+                                existingBlob.Upload(stream, true);
+                            }
+                        }
+                        catch (Azure.RequestFailedException are)
+                        {
+                            if (are.ErrorCode == "InvalidRequest")
+                            {
+                                _logger.LogError($"Failed to process file at URL:{invBlob.Name}. You may need to set permissions from the Form Recognizer to access your storage account. {are.ToString()}");
+                            }
+                            else
+                            {
+                                _logger.LogError($"Failed to process file at URL:{invBlob.Name}. {are.ToString()}");
+                            }
+                            return false;
+                        }
+                        catch (Exception exe)
+                        {
 
-                //         if (pollyResult.Outcome == OutcomeType.Failure)
-                //         {
-                //             _logger.LogError($"Policy retries failed for calling UpdateStatusAsync on {fileUri}. Resulting exception: {pollyResult.FinalException}");
-                //         }
-
-                //     } while (!operation.HasCompleted);
-
-
-                //     string output = JsonSerializer.Serialize(operation.Value, new JsonSerializerOptions() { WriteIndented = true });
-                //     // Save the output to a blob
-                //     var blobClient = processedContainerClient.GetBlobClient($"{loanNumber}.json");
-                //     using (var stream = new MemoryStream(Encoding.UTF8.GetBytes(output)))
-                //     {
-                //         await blobClient.UploadAsync(stream, true);
-                //     }
-
-                //     return true;
-                // }
-                // catch (Azure.RequestFailedException are)
-                // {
-                //     if (are.ErrorCode == "InvalidRequest")
-                //     {
-                //         _logger.LogError($"Failed to process file at URL:{fileUri.AbsoluteUri}. You may need to set permissions from the Form Recognizer to access your storage account. {are.ToString()}");
-                //     }
-                //     else
-                //     {
-                //         _logger.LogError($"Failed to process file at URL:{fileUri.AbsoluteUri}. {are.ToString()}");
-                //     }
-                //     return false;
-                // }
-                // catch (Exception exe)
-                // {
-
-                //     _logger.LogError($"Failed to process file at URL:{fileUri.AbsoluteUri}. {exe.ToString()}");
-                //     return false;
-                // }
+                            _logger.LogError($"Failed to process file at URL:{invBlob.Name}. {exe.ToString()}");
+                            return false;
+                        }
+                    }
+                }
                 return true;
             }
         }
@@ -385,12 +435,127 @@ namespace InvoiceLlm
             }
             return json;  
         }  
+        private static string ExtractFormRecognizerData(string json, string templateStructure)
+        {
+            JObject invoices = JsonConvert.DeserializeObject<JObject>(json);  
+            var analyzeResults = invoices["analyzeResult"];
+    
+            string paymentDate = string.Empty;  
+            string serviceDate = string.Empty;  
+            string invoiceNbr = string.Empty;  
+            string vendorName = string.Empty;  
+            string expenseDesc = string.Empty;  
+            string additionalExpenseComments = string.Empty;  
+            string amountPaid = string.Empty;  
+            string notes = string.Empty;  
+    
+            foreach (var invoice in analyzeResults["documents"])  
+            {  
+                foreach (var field in invoice["fields"])  
+                {  
+                    string name = field.Path.Split('.').Last(); // Get the field name  
+                    var content = field.First["content"];  
+    
+                    if (name != "Items")  
+                    {  
+                        if (name == "VendorName")  
+                        {  
+                            vendorName = content.ToString();  
+                        }  
+                        if (name == "InvoiceId")  
+                        {  
+                            invoiceNbr = content.ToString();  
+                        }  
+                        if (name == "CustomerAddress")  
+                        {  
+                            notes = content.ToString();  
+                        }  
+                    }  
+                }  
+                var items = invoice["fields"]["Items"]["valueArray"];
+                if (items != null)  
+                {  
+                    int idx = 0;
+                    foreach (JObject item in items)  
+                    {  
+                        JObject amountObject = (JObject)item["valueObject"]?["Amount"];
+                        JObject dateObject = (JObject)item["valueObject"]?["Date"];
+                        JObject descObject = (JObject)item["valueObject"]?["Description"];
+
+                        if (amountObject != null)
+                        {
+                            if ((string)amountObject["type"] == "currency")
+                            {
+                                amountPaid = (string)amountObject["valueCurrency"]?["amount"];
+                            }
+                            else
+                            {
+                                amountPaid = (string)amountObject["content"];
+                            }
+                        }
+
+                        if (dateObject != null)
+                        {
+                            if ((string)dateObject["type"] == "date")
+                            {
+                                serviceDate = (string)dateObject["valueDate"];
+                            }
+                            else
+                            {
+                                serviceDate = (string)dateObject["content"];
+                            }
+                        }
+
+                        if (descObject != null)
+                        {
+                            expenseDesc = (string)descObject["content"];
+                        }                        
+                    }
+                }
+            }
+
+            // foreach (var kv in analyzeResults["key_value_pairs"])  
+            // {  
+            //     if (kv["value"] != null && kv["value"].HasValues)  
+            //     {  
+            //         var keyContent = (string)kv["key"]["content"];  
+            //         var valueContent = (string)kv["value"]["content"];  
+            
+            //         if (!string.IsNullOrEmpty(keyContent) && !string.IsNullOrEmpty(valueContent))  
+            //         {  
+            //             if (keyContent == "PaymentDate")  
+            //             {  
+            //                 paymentDate = valueContent;  
+            //             }  
+            //         }  
+            //     }  
+            // }  
+    
+            // Remove the prefix "60" from the invoice number if needed  
+            if (!string.IsNullOrEmpty(invoiceNbr) && invoiceNbr.StartsWith("60"))  
+            {  
+                invoiceNbr = invoiceNbr.Substring(2);  
+            }  
+    
+            Dictionary<string, object> values = new Dictionary<string, object>
+            {  
+                ["Service_Date"] = serviceDate,  
+                ["Amount_Paid"] = amountPaid,  
+                ["Vendor_Name"] = vendorName,  
+                ["Invoice_Number"] = invoiceNbr,  
+                ["Expense_Description"] = expenseDesc,  
+                ["Additional_Expense_Comments"] = additionalExpenseComments,  
+                ["Notes"] = notes  
+            };  
+            string filledItem = ReplaceJsonPlaceHolder(templateStructure, values);
+            return filledItem;
+        }
         private async Task<bool> ProcessFormRecognition(bool isLocal, string loanNumber, string excelSource, string corpAdvSource, string invSource)
         {
+            List<string> extractedData = new List<string>();  
+            string templateStructure = "{\"Payment Date\":\"<Payment_Date>\",\"Service Date\":\"<Service_Date>\", \"Expense Type\": \"\",\"Additional Expense Comments\":\"<Additional_Expense_Comments>\",\"Expense Description\": \"<Expense_Description>\",\"Amount Paid\": \"<Amount_Paid>\",\"Amount Claimed\": \"\",\"Amount Not Claimed\": \"\",\"Unclaimed Amount Reason\": \"\",\"Vendor Name\": \"<Vendor_Name>\",\"Invoice Number\": \"<Invoice_Number>\",\"Fee Type Code\": \"\",\"Recovery Type\": \"\",\"Actual Recovery Code\": \"\",\"Expense Code\": \"\",\"Fee Reference Comments\": \"\",\"File Name\": \"\",\"Document Available\": \"\",\"Notes\": \"<Notes>\"}";
             if (isLocal)
             {
-                List<string> extractedData = new List<string>();  
-                string templateStructure = "{\"Payment Date\":\"<Payment_Date>\",\"Service Date\":\"<Service_Date>\", \"Expense Type\": \"\",\"Additional Expense Comments\":\"<Additional_Expense_Comments>\",\"Expense Description\": \"<Expense_Description>\",\"Amount Paid\": \"<Amount_Paid>\",\"Amount Claimed\": \"\",\"Amount Not Claimed\": \"\",\"Unclaimed Amount Reason\": \"\",\"Vendor Name\": \"<Vendor_Name>\",\"Invoice Number\": \"<Invoice_Number>\",\"Fee Type Code\": \"\",\"Recovery Type\": \"\",\"Actual Recovery Code\": \"\",\"Expense Code\": \"\",\"Fee Reference Comments\": \"\",\"File Name\": \"\",\"Document Available\": \"\",\"Notes\": \"<Notes>\"}";
                 // Read the corporate advance source file(s) from local directory
                 string corpAdvFilePath = string.Concat(Directory.GetParent(Environment.CurrentDirectory)?.Parent?.Parent?.FullName, Settings.LocalSourceDirectory, loanNumber, "\\", corpAdvSource);
                 // Read all the corporate advance source files from the directory
@@ -403,117 +568,7 @@ namespace InvoiceLlm
                     try
                     {
                         string json = File.ReadAllText(corpAdvFile);
-                        JObject invoices = JsonConvert.DeserializeObject<JObject>(json);  
-                        var analyzeResults = invoices["analyzeResult"];
-                
-                        string paymentDate = string.Empty;  
-                        string serviceDate = string.Empty;  
-                        string invoiceNbr = string.Empty;  
-                        string vendorName = string.Empty;  
-                        string expenseDesc = string.Empty;  
-                        string additionalExpenseComments = string.Empty;  
-                        string amountPaid = string.Empty;  
-                        string notes = string.Empty;  
-                
-                        foreach (var invoice in analyzeResults["documents"])  
-                        {  
-                            foreach (var field in invoice["fields"])  
-                            {  
-                                string name = field.Path.Split('.').Last(); // Get the field name  
-                                var content = field.First["content"];  
-                
-                                if (name != "Items")  
-                                {  
-                                    if (name == "VendorName")  
-                                    {  
-                                        vendorName = content.ToString();  
-                                    }  
-                                    if (name == "InvoiceId")  
-                                    {  
-                                        invoiceNbr = content.ToString();  
-                                    }  
-                                    if (name == "CustomerAddress")  
-                                    {  
-                                        notes = content.ToString();  
-                                    }  
-                                }  
-                            }  
-                            var items = invoice["fields"]["Items"]["valueArray"];
-                            if (items != null)  
-                            {  
-                                int idx = 0;
-                                foreach (JObject item in items)  
-                                {  
-                                    JObject amountObject = (JObject)item["valueObject"]?["Amount"];
-                                    JObject dateObject = (JObject)item["valueObject"]?["Date"];
-                                    JObject descObject = (JObject)item["valueObject"]?["Description"];
-
-                                    if (amountObject != null)
-                                    {
-                                        if ((string)amountObject["type"] == "currency")
-                                        {
-                                            amountPaid = (string)amountObject["valueCurrency"]?["amount"];
-                                        }
-                                        else
-                                        {
-                                            amountPaid = (string)amountObject["content"];
-                                        }
-                                    }
-
-                                    if (dateObject != null)
-                                    {
-                                        if ((string)dateObject["type"] == "date")
-                                        {
-                                            serviceDate = (string)dateObject["valueDate"];
-                                        }
-                                        else
-                                        {
-                                            serviceDate = (string)dateObject["content"];
-                                        }
-                                    }
-
-                                    if (descObject != null)
-                                    {
-                                        expenseDesc = (string)descObject["content"];
-                                    }                        
-                                }
-                            }
-                        }
-
-                        // foreach (var kv in analyzeResults["key_value_pairs"])  
-                        // {  
-                        //     if (kv["value"] != null && kv["value"].HasValues)  
-                        //     {  
-                        //         var keyContent = (string)kv["key"]["content"];  
-                        //         var valueContent = (string)kv["value"]["content"];  
-                        
-                        //         if (!string.IsNullOrEmpty(keyContent) && !string.IsNullOrEmpty(valueContent))  
-                        //         {  
-                        //             if (keyContent == "PaymentDate")  
-                        //             {  
-                        //                 paymentDate = valueContent;  
-                        //             }  
-                        //         }  
-                        //     }  
-                        // }  
-                
-                        // Remove the prefix "60" from the invoice number if needed  
-                        if (!string.IsNullOrEmpty(invoiceNbr) && invoiceNbr.StartsWith("60"))  
-                        {  
-                            invoiceNbr = invoiceNbr.Substring(2);  
-                        }  
-                
-                        Dictionary<string, object> values = new Dictionary<string, object>
-                        {  
-                            ["Service_Date"] = serviceDate,  
-                            ["Amount_Paid"] = amountPaid,  
-                            ["Vendor_Name"] = vendorName,  
-                            ["Invoice_Number"] = invoiceNbr,  
-                            ["Expense_Description"] = expenseDesc,  
-                            ["Additional_Expense_Comments"] = additionalExpenseComments,  
-                            ["Notes"] = notes  
-                        };  
-                        string filledItem = ReplaceJsonPlaceHolder(templateStructure, values);
+                        var filledItem = ExtractFormRecognizerData(json, templateStructure);
                         extractedData.Add(filledItem);
                     }
                     catch (Azure.RequestFailedException are)
@@ -548,118 +603,7 @@ namespace InvoiceLlm
                     try
                     {
                         string invJson = File.ReadAllText(invFile);
-                        JObject invoices = JsonConvert.DeserializeObject<JObject>(invJson);  
-                        var analyzeResults = invoices["analyzeResult"];
-
-                        string paymentDate = string.Empty;  
-                        string serviceDate = string.Empty;  
-                        string invoiceNbr = string.Empty;  
-                        string vendorName = string.Empty;  
-                        string expenseDesc = string.Empty;  
-                        string additionalExpenseComments = string.Empty;  
-                        string amountPaid = string.Empty;  
-                        string notes = string.Empty;  
-                
-                        foreach (var invoice in analyzeResults["documents"])  
-                        {  
-                            foreach (var field in invoice["fields"])  
-                            {  
-                                string name = field.Path.Split('.').Last(); // Get the field name  
-                                var content = field.First["content"];  
-                
-                                if (name != "Items")  
-                                {  
-                                    if (name == "VendorName")  
-                                    {  
-                                        vendorName = content.ToString();  
-                                    }  
-                                    if (name == "InvoiceId")  
-                                    {  
-                                        invoiceNbr = content.ToString();  
-                                    }  
-                                    if (name == "CustomerAddress")  
-                                    {  
-                                        notes = content.ToString();  
-                                    }  
-                                }  
-                            }  
-                            var items = invoice["fields"]["Items"]["valueArray"];
-                            if (items != null)  
-                            {  
-                                int idx = 0;
-                                foreach (JObject item in items)  
-                                {  
-                                    JObject amountObject = (JObject)item["valueObject"]?["Amount"];
-                                    JObject dateObject = (JObject)item["valueObject"]?["Date"];
-                                    JObject descObject = (JObject)item["valueObject"]?["Description"];
-
-                                    if (amountObject != null)
-                                    {
-                                        if ((string)amountObject["type"] == "currency")
-                                        {
-                                            amountPaid = (string)amountObject["valueCurrency"]?["amount"];
-                                        }
-                                        else
-                                        {
-                                            amountPaid = (string)amountObject["content"];
-                                        }
-                                    }
-
-                                    if (dateObject != null)
-                                    {
-                                        if ((string)dateObject["type"] == "date")
-                                        {
-                                            serviceDate = (string)dateObject["valueDate"];
-                                        }
-                                        else
-                                        {
-                                            serviceDate = (string)dateObject["content"];
-                                        }
-                                    }
-
-                                    if (descObject != null)
-                                    {
-                                        expenseDesc = (string)descObject["content"];
-                                    }
-                        
-                                }
-                            }
-                        }  
-                
-                        // foreach (var kv in analyzeResults["key_value_pairs"])  
-                        // {  
-                        //     if (kv["value"] != null && kv["value"].HasValues)  
-                        //     {  
-                        //         var keyContent = (string)kv["key"]["content"];  
-                        //         var valueContent = (string)kv["value"]["content"];  
-                        
-                        //         if (!string.IsNullOrEmpty(keyContent) && !string.IsNullOrEmpty(valueContent))  
-                        //         {  
-                        //             if (keyContent == "PaymentDate")  
-                        //             {  
-                        //                 paymentDate = valueContent;  
-                        //             }  
-                        //         }  
-                        //     }  
-                        // }  
-                
-                        // Remove the prefix "60" from the invoice number if needed  
-                        if (!string.IsNullOrEmpty(invoiceNbr) && invoiceNbr.StartsWith("60"))  
-                        {  
-                            invoiceNbr = invoiceNbr.Substring(2);  
-                        }  
-                
-                        Dictionary<string, object> values = new Dictionary<string, object>
-                        {  
-                            ["Service_Date"] = serviceDate,  
-                            ["Amount_Paid"] = amountPaid,  
-                            ["Vendor_Name"] = vendorName,  
-                            ["Invoice_Number"] = invoiceNbr,  
-                            ["Expense_Description"] = expenseDesc,  
-                            ["Additional_Expense_Comments"] = additionalExpenseComments,  
-                            ["Notes"] = notes  
-                        };  
-                        string filledItem = ReplaceJsonPlaceHolder(templateStructure, values);
+                        var filledItem = ExtractFormRecognizerData(invJson, templateStructure);
                         extractedData.Add(filledItem);
                     }
                     catch (Azure.RequestFailedException are)
@@ -682,10 +626,6 @@ namespace InvoiceLlm
                     }
                 }
 
-                // var output = new Dictionary<string, object>  
-                // {  
-                //     {"Advances", extractedData}  
-                // }; 
                 string frJsonOut = Newtonsoft.Json.JsonConvert.SerializeObject(extractedData, new Newtonsoft.Json.JsonSerializerSettings { Formatting = Newtonsoft.Json.Formatting.Indented });
                 frJsonOut = frJsonOut.Replace("\\", "");
                 frJsonOut = frJsonOut.Replace("\"{", "{");
@@ -694,6 +634,92 @@ namespace InvoiceLlm
                 string outputFilePath = string.Concat(Directory.GetParent(Environment.CurrentDirectory)?.Parent?.Parent?.FullName, Settings.LocalSourceDirectory, loanNumber, "\\", loanNumber, "_FrOut.json");
                 _logger.LogInformation($"Saving JSON to file '{outputFilePath}'");
                 File.WriteAllText(outputFilePath, frJsonOut);
+            }
+            else
+            {
+                var blobItems = sourceContainerClient.GetBlobs(prefix: loanNumber + "/" + corpAdvSource);
+                foreach (var blob in blobItems)
+                {
+                    if (blob.Name.EndsWith(".json"))
+                    {
+                        _logger.LogInformation($"Processing corporate advance JSON data '{blob.Name}'");
+                        try
+                        {
+                            // Read the blob JSON into a string
+                            var blobStream = sourceContainerClient.GetBlobClient(blob.Name).OpenRead();
+                            string json = new StreamReader(blobStream).ReadToEnd();
+                            var filledItem = ExtractFormRecognizerData(json, templateStructure);
+                            extractedData.Add(filledItem);
+                        }
+                        catch (Azure.RequestFailedException are)
+                        {
+                            if (are.ErrorCode == "InvalidRequest")
+                            {
+                                _logger.LogError($"Failed to process file at URL:{blob.Name}. You may need to set permissions from the Form Recognizer to access your storage account. {are.ToString()}");
+                            }
+                            else
+                            {
+                                _logger.LogError($"Failed to process file at URL:{blob.Name}. {are.ToString()}");
+                            }
+                            return false;
+                        }
+                        catch (Exception exe)
+                        {
+
+                            _logger.LogError($"Failed to process file at URL:{blob.Name}. {exe.ToString()}");
+                            return false;
+                        }
+
+                    }
+                }
+
+                var invBlobItems = sourceContainerClient.GetBlobs(prefix: loanNumber + "/" + invSource);
+                foreach (var blob in invBlobItems)
+                {
+                    if (blob.Name.EndsWith(".json"))
+                    {
+                        _logger.LogInformation($"Processing corporate advance JSON data '{blob.Name}'");
+                        try
+                        {
+                            // Read the blob JSON into a string
+                            var blobStream = sourceContainerClient.GetBlobClient(blob.Name).OpenRead();
+                            string json = new StreamReader(blobStream).ReadToEnd();
+                            var filledItem = ExtractFormRecognizerData(json, templateStructure);
+                            extractedData.Add(filledItem);
+                        }
+                        catch (Azure.RequestFailedException are)
+                        {
+                            if (are.ErrorCode == "InvalidRequest")
+                            {
+                                _logger.LogError($"Failed to process file at URL:{blob.Name}. You may need to set permissions from the Form Recognizer to access your storage account. {are.ToString()}");
+                            }
+                            else
+                            {
+                                _logger.LogError($"Failed to process file at URL:{blob.Name}. {are.ToString()}");
+                            }
+                            return false;
+                        }
+                        catch (Exception exe)
+                        {
+
+                            _logger.LogError($"Failed to process file at URL:{blob.Name}. {exe.ToString()}");
+                            return false;
+                        }
+
+                    }
+                }
+
+                string frJsonOut = Newtonsoft.Json.JsonConvert.SerializeObject(extractedData, new Newtonsoft.Json.JsonSerializerSettings { Formatting = Newtonsoft.Json.Formatting.Indented });
+                frJsonOut = frJsonOut.Replace("\\", "");
+                frJsonOut = frJsonOut.Replace("\"{", "{");
+                frJsonOut = frJsonOut.Replace("}\"", "}");
+                var destinationBlobName = string.Concat(loanNumber, "/", loanNumber + "_FrOut.json");
+                _logger.LogInformation($"Saving JSON to file '{destinationBlobName}'");
+                var blobClient = sourceContainerClient.GetBlobClient(destinationBlobName);
+                using (var stream = new MemoryStream(Encoding.UTF8.GetBytes(frJsonOut)))
+                {
+                    blobClient.Upload(stream, true);
+                }
             }
             return true;
         }

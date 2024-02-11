@@ -67,6 +67,7 @@ namespace InvoiceLlm
         {
             var isLocal = reconcileMetadata.isLocal;
             var loanNumber = reconcileMetadata.loanNumber;
+            List<string> keyFields = new List<string> { "Service Date", "Invoice Number" };
 
             if (isLocal)
             {
@@ -74,7 +75,6 @@ namespace InvoiceLlm
                 string jsonFr = string.Concat(Directory.GetParent(Environment.CurrentDirectory)?.Parent?.Parent?.FullName, Settings.LocalSourceDirectory, loanNumber, "\\", loanNumber, "_FrOut.json");
                 string jsonArray1 = File.ReadAllText(jsonExcel);
                 string jsonArray2 = File.ReadAllText(jsonFr);
-                List<string> keyFields = new List<string> { "Service Date", "Invoice Number" };  
                 Tuple<string, string> reconcileData = CompareJsonArrays(jsonArray1, jsonArray2, keyFields); 
                 string matchingJson = reconcileData.Item1;
                 string nonMatchingJson = reconcileData.Item2;
@@ -91,7 +91,41 @@ namespace InvoiceLlm
             }
             else
             {
-                return await ProcessRemoteReconcile(loanNumber);
+                // Get the source file from the blob storage
+                var blobName = string.Concat(loanNumber, "/", loanNumber, ".json");
+                var excelJson = sourceContainerClient.GetBlobClient(blobName);
+                // Read the source blob file as a string
+                var sourceJson = await excelJson.DownloadAsync();
+                var jsonArray1 = await new StreamReader(sourceJson.Value.Content).ReadToEndAsync();
+
+                // Get the FrOut file from the blob storage
+                var frOutBlobName = string.Concat(loanNumber, "/", loanNumber, "_FrOut.json");
+                var frOutJson = sourceContainerClient.GetBlobClient(frOutBlobName);
+                // Read the FrOut blob file as a string
+                var frOutJsonData = await frOutJson.DownloadAsync();
+                var jsonArray2 = await new StreamReader(frOutJsonData.Value.Content).ReadToEndAsync();
+
+                Tuple<string, string> reconcileData = CompareJsonArrays(jsonArray1, jsonArray2, keyFields); 
+                string matchingJson = reconcileData.Item1;
+                string nonMatchingJson = reconcileData.Item2;
+
+                // Save the matching rows to the source container
+                var matchingBlobName = string.Concat(loanNumber, "/", loanNumber, "_FuzzyMatching.json");
+                var matchingBlob = sourceContainerClient.GetBlobClient(matchingBlobName);
+                var matchingJsonBytes = Encoding.UTF8.GetBytes(matchingJson);
+                using (var stream = new MemoryStream(matchingJsonBytes))
+                {
+                    await matchingBlob.UploadAsync(stream, true);
+                }
+
+                // Save the non-matching rows to the source container
+                var nonMatchingBlobName = string.Concat(loanNumber, "/", loanNumber, "_FuzzyNonMatching.json");
+                var nonMatchingBlob = sourceContainerClient.GetBlobClient(nonMatchingBlobName);
+                var nonMatchingJsonBytes = Encoding.UTF8.GetBytes(nonMatchingJson);
+                using (var stream = new MemoryStream(nonMatchingJsonBytes))
+                {
+                    await nonMatchingBlob.UploadAsync(stream, true);
+                }
             }
             return true;
         }
