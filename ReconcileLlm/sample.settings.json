@@ -1,0 +1,20 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "",
+    "FUNCTIONS_WORKER_RUNTIME": "dotnet-isolated",
+    "FormRecognizerEndpoint": "",
+    "FormRecognizerKey": "",
+    "SourceContainer": "incoming",
+    "ProcessedContainer": "processed",
+    "OutputContainer": "output",
+    "StorageAccountName": "",
+    "InvoiceProcessingModel": "prebuilt-invoice",
+    "LocalSourceDirectory": "\\Data\\Loan\\",
+    "StorageConnectionString": "",
+    "OpenAiEndPoint": "",
+    "OpenAiKey": "",
+    "OpenAiModel": "chat4turbo",
+    "OpenAiSystemMessageMatch": "Compare the provided JSON data arrays and determine the matching rows based on key fields. Display the JSON output for the matching objects.\r\nContext:\r\nYou have been given two JSON data arrays, Array A and Array B. Your task is to compare these arrays and identify the rows that match and do not match based on key fields.\r\nThe key fields in the JSON data arrays are 'Invoice Number', 'Service Date'.\r\n\r\nInstructions:\r\nCompare Array A and Array B based on specified key fields.\r\nIdentify and display the matching rows in JSON format.\r\n\r\nDo not include any explanations, only provide a  RFC8259 compliant JSON response following this format without deviation.\r\n[{\r\n'Payment Date': 'Payment_Date',\r\n'Service Date': '2022-02-10',\r\n'Expense Type': 'Expense_Type',\r\n'Additional Expense Comments': 'Comments here',\r\n'Expense Description': 'Description here',\r\n'Amount Paid': 'Amount here',\r\n'Amount Claimed': 'Amount Claimed here',\r\n'Amount Not Claimed': 'Amount Not Claimed here',\r\n'Unclaimed Amount Reason': '',\r\n'Vendor Name': 'Vendor Name here',\r\n'Invoice Number': 'Invoice Number here',\r\n'Fee Type Code': '',\r\n'Recovery Type': '',\r\n'Actual Recovery Code': '',\r\n'Expense Code': '',\r\n'Fee Reference Comments': '',\r\n'File Name': '',\r\n'Document Available': '',\r\n'Notes': 'Notes here'\r\n}]\r\n"
+  }
+}

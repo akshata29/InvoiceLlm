@@ -22,6 +22,10 @@ namespace InvoiceLlm.Helper
         private static ILogger<StorageHelper> storageLogger;
         private static string _endpoint = string.Empty;
         private static List<string> _keys = new List<string>();
+        private static string _openAiEndPoint = string.Empty;
+        private static string _openAiKey = string.Empty;
+        private static string _openAiModel = string.Empty;
+        private static string _openAiSystemMessageMatch = string.Empty;
         private static string _sourceContainerName = string.Empty;
         private static string _processedContainerName = string.Empty;
         private static string _outputContainerName = string.Empty;
@@ -62,6 +66,50 @@ namespace InvoiceLlm.Helper
                     }
                 }
                 return _keys;
+            }
+        }
+        public static string OpenAiEndpoint
+        {
+            get
+            {
+                if (string.IsNullOrWhiteSpace(_openAiEndPoint))
+                {
+                    _openAiEndPoint = Environment.GetEnvironmentVariable("OpenAiEndPoint");
+                }
+                return _openAiEndPoint;
+            }
+        }
+        public static string OpenAiSystemMessageMatch
+        {
+            get
+            {
+                if (string.IsNullOrWhiteSpace(_openAiSystemMessageMatch))
+                {
+                    _openAiSystemMessageMatch = Environment.GetEnvironmentVariable("OpenAiSystemMessageMatch");
+                }
+                return _openAiSystemMessageMatch;
+            }
+        }
+        public static string OpenAiKey
+        {
+            get
+            {
+                if (string.IsNullOrWhiteSpace(_openAiKey))
+                {
+                    _openAiKey = Environment.GetEnvironmentVariable("OpenAiKey");
+                }
+                return _openAiKey;
+            }
+        }
+        public static string OpenAiModel
+        {
+            get
+            {
+                if (string.IsNullOrWhiteSpace(_openAiModel))
+                {
+                    _openAiModel = Environment.GetEnvironmentVariable("OpenAiModel");
+                }
+                return _openAiModel;
             }
         }
         public static string SourceContainerName
