@@ -1,0 +1,8 @@
+AnalyzeInvoice/Properties/launchSettings.json
+Data/*
+bin/*
+obj/*
+Helper/bin/*
+Helper/obj/*
+AnalyzeInvoice/bin/*
+AnalyzeInvoice/obj/*
