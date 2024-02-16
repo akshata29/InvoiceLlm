@@ -1,0 +1,312 @@
+{
+    "definition": {
+        "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+        "actions": {
+            "For_each_folder": {
+                "actions": {
+                    "Condition": {
+                        "actions": {
+                            "Call_Step_3": {
+                                "inputs": {
+                                    "body": {
+                                        "values": [
+                                            {
+                                                "data": {
+                                                    "text": ""
+                                                },
+                                                "recordId": 0
+                                            }
+                                        ]
+                                    },
+                                    "function": {
+                                        "connectionName": "azureFunctionOperation"
+                                    },
+                                    "method": "POST",
+                                    "queries": {
+                                        "corpAdvFolder": "CORPADV",
+                                        "invoiceFolder": "INVOICE",
+                                        "isLocal": "false",
+                                        "loanNumber": "@{variables('loanNumber')}",
+                                        "step": "3"
+                                    }
+                                },
+                                "runAfter": {
+                                    "Set_variable": [
+                                        "SUCCEEDED"
+                                    ]
+                                },
+                                "type": "Function"
+                            },
+                            "Create_HTML_table": {
+                                "inputs": {
+                                    "format": "HTML",
+                                    "from": "@body('Parse_Fuzzy_Matching')"
+                                },
+                                "runAfter": {
+                                    "Parse_Fuzzy_Matching": [
+                                        "SUCCEEDED"
+                                    ]
+                                },
+                                "type": "Table"
+                            },
+                            "For_each": {
+                                "actions": {
+                                    "Send_an_email_(V2)": {
+                                        "inputs": {
+                                            "body": {
+                                                "Body": "<p>Total Source Records- @{items('For_each')?['data']?['answer']?['Total Source Records']}</p><p>Total Scanned Invoice Records -@{items('For_each')?['data']?['answer']?['Total Scanned Invoice Records']}</p><p>Ground Truth Amount - @{items('For_each')?['data']?['answer']?['GroundTruthAmount']}</p><p>Scanned Invoice Amount - @{items('For_each')?['data']?['answer']?['ScannedInvoiceAmount']}</p><p>Matching Invoice Items - @{items('For_each')?['data']?['answer']?['Matching']}</p><p>Non-Matching Invoice Items - @{items('For_each')?['data']?['answer']?['NonMatching']}</p><br><p>Following are the matching Invoice Items:</p><br><p>@{body('Create_HTML_table')}</p>",
+                                                "Importance": "Normal",
+                                                "Subject": "Initial Compare & Scan - Invoice Llm - Loan # @{variables('loanNumber')}",
+                                                "To": "ashish.talati@microsoft.com"
+                                            },
+                                            "host": {
+                                                "connection": {
+                                                    "referenceName": "office365"
+                                                }
+                                            },
+                                            "method": "post",
+                                            "path": "/v2/Mail"
+                                        },
+                                        "type": "ApiConnection"
+                                    }
+                                },
+                                "foreach": "@outputs('Parse_JSON')?['body']?['values']",
+                                "runAfter": {
+                                    "Create_HTML_table": [
+                                        "SUCCEEDED"
+                                    ]
+                                },
+                                "type": "foreach"
+                            },
+                            "Get_blob_content_(V2)": {
+                                "inputs": {
+                                    "host": {
+                                        "connection": {
+                                            "referenceName": "azureblob-1"
+                                        }
+                                    },
+                                    "method": "get",
+                                    "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('AccountNameFromSettings'))}/files/@{encodeURIComponent(encodeURIComponent(concat('/output/', variables('loanNumber'), '/', variables('loanNumber'), '_FuzzyMatching.json')))}/content",
+                                    "queries": {
+                                        "inferContentType": true
+                                    }
+                                },
+                                "metadata": {
+                                    "JTJmb3V0cHV0JTJmNDAwMDgzNTk2OCUyZjQwMDA4MzU5NjhfRnV6enlNYXRjaGluZy5qc29u": "/output/4000835968/4000835968_FuzzyMatching.json"
+                                },
+                                "runAfter": {
+                                    "Parse_JSON": [
+                                        "SUCCEEDED"
+                                    ]
+                                },
+                                "type": "ApiConnection"
+                            },
+                            "Parse_Fuzzy_Matching": {
+                                "inputs": {
+                                    "content": "@decodeBase64(body('Get_blob_content_(V2)')['$content'])",
+                                    "schema": {
+                                        "items": {
+                                            "properties": {
+                                                "Invoice_Date": {
+                                                    "type": "string"
+                                                },
+                                                "Invoice_Item_Description": {
+                                                    "type": "string"
+                                                },
+                                                "Invoice_Nbr": {
+                                                    "type": "string"
+                                                },
+                                                "Invoice_Total": {
+                                                    "type": "number"
+                                                },
+                                                "Item_Amount": {
+                                                    "type": "number"
+                                                },
+                                                "Item_Description": {
+                                                    "type": "string"
+                                                },
+                                                "Payment_Date": {
+                                                    "type": "string"
+                                                },
+                                                "Row_Id": {
+                                                    "type": "integer"
+                                                },
+                                                "Row_Id_Invoice": {
+                                                    "type": "integer"
+                                                },
+                                                "Service_Date": {
+                                                    "type": "string"
+                                                }
+                                            },
+                                            "required": [],
+                                            "type": "object"
+                                        },
+                                        "type": "array"
+                                    }
+                                },
+                                "runAfter": {
+                                    "Get_blob_content_(V2)": [
+                                        "SUCCEEDED"
+                                    ]
+                                },
+                                "type": "ParseJson"
+                            },
+                            "Parse_JSON": {
+                                "inputs": {
+                                    "content": "@body('Call_Step_3')",
+                                    "schema": {
+                                        "properties": {
+                                            "values": {
+                                                "items": {
+                                                    "properties": {
+                                                        "data": {
+                                                            "properties": {
+                                                                "answer": {
+                                                                    "properties": {
+                                                                        "GroundTruthAmount": {
+                                                                            "type": "integer"
+                                                                        },
+                                                                        "Matching": {
+                                                                            "type": "integer"
+                                                                        },
+                                                                        "NonMatching": {
+                                                                            "type": "integer"
+                                                                        },
+                                                                        "ScannedInvoiceAmount": {
+                                                                            "type": "integer"
+                                                                        },
+                                                                        "Total Scanned Invoice Records": {
+                                                                            "type": "integer"
+                                                                        },
+                                                                        "Total Source Records": {
+                                                                            "type": "integer"
+                                                                        }
+                                                                    },
+                                                                    "type": "object"
+                                                                },
+                                                                "data_points": {
+                                                                    "type": "string"
+                                                                },
+                                                                "error": {
+                                                                    "type": "string"
+                                                                },
+                                                                "nextQuestions": {
+                                                                    "type": "string"
+                                                                },
+                                                                "sources": {
+                                                                    "type": "string"
+                                                                },
+                                                                "thoughts": {
+                                                                    "type": "string"
+                                                                }
+                                                            },
+                                                            "type": "object"
+                                                        },
+                                                        "recordId": {
+                                                            "type": "integer"
+                                                        }
+                                                    },
+                                                    "required": [
+                                                        "recordId",
+                                                        "data"
+                                                    ],
+                                                    "type": "object"
+                                                },
+                                                "type": "array"
+                                            }
+                                        },
+                                        "type": "object"
+                                    }
+                                },
+                                "runAfter": {
+                                    "Call_Step_3": [
+                                        "SUCCEEDED"
+                                    ]
+                                },
+                                "type": "ParseJson"
+                            },
+                            "Set_variable": {
+                                "inputs": {
+                                    "name": "loanNumber",
+                                    "value": "@{replace(items('For_each_folder')?['Name'], '/', '')}"
+                                },
+                                "type": "SetVariable"
+                            }
+                        },
+                        "else": {
+                            "actions": {}
+                        },
+                        "expression": {
+                            "and": [
+                                {
+                                    "equals": [
+                                        "@items('For_each_folder')?['IsFolder']",
+                                        true
+                                    ]
+                                }
+                            ]
+                        },
+                        "type": "If"
+                    }
+                },
+                "foreach": "@body('Lists_blobs_(V2)')?['value']",
+                "runAfter": {
+                    "Initialize_variable": [
+                        "SUCCEEDED"
+                    ]
+                },
+                "type": "Foreach"
+            },
+            "Initialize_variable": {
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "loanNumber",
+                            "type": "string"
+                        }
+                    ]
+                },
+                "runAfter": {
+                    "Lists_blobs_(V2)": [
+                        "SUCCEEDED"
+                    ]
+                },
+                "type": "InitializeVariable"
+            },
+            "Lists_blobs_(V2)": {
+                "inputs": {
+                    "host": {
+                        "connection": {
+                            "referenceName": "azureblob-1"
+                        }
+                    },
+                    "method": "get",
+                    "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('AccountNameFromSettings'))}/foldersV2/@{encodeURIComponent(encodeURIComponent('JTJmb3V0cHV0'))}",
+                    "queries": {
+                        "nextPageMarker": "",
+                        "useFlatListing": false
+                    }
+                },
+                "metadata": {
+                    "JTJmaW5jb21pbmc=": "/incoming",
+                    "JTJmb3V0cHV0": "/output"
+                },
+                "runAfter": {},
+                "type": "ApiConnection"
+            }
+        },
+        "contentVersion": "1.0.0.0",
+        "outputs": {},
+        "triggers": {
+            "Recurrence": {
+                "recurrence": {
+                    "frequency": "Day",
+                    "interval": 1,
+                    "timeZone": "Central Standard Time"
+                },
+                "type": "Recurrence"
+            }
+        }
+    },
+    "kind": "Stateful"
+}

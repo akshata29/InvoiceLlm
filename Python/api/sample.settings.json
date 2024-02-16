@@ -1,0 +1,20 @@
+{
+    "IsEncrypted": false,
+    "Values": {
+      "FUNCTIONS_WORKER_RUNTIME": "python",
+      "AzureWebJobsFeatureFlags": "EnableWorkerIndexing",
+      "OpenAiDocStorName": "dataaiopenaistor",
+      "OpenAiDocStorKey": "",
+      "IncomingContainer": "incoming",
+      "OutputContainer": "output",
+      "ProcessedContainer": "processed",
+      "FormRecognizerEndpoint": "https://.cognitiveservices.azure.com/",
+      "FormRecognizerKey": ""
+    },
+    "Host": {
+      "LocalHttpPort": 7072,
+      "CORS": "*",
+      "CORSCredentials": false
+    }
+  }
+  

@@ -1,0 +1,123 @@
+{
+    "definition": {
+        "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+        "actions": {
+            "For_each_folder": {
+                "actions": {
+                    "Condition": {
+                        "actions": {
+                            "Call_Step_1": {
+                                "inputs": {
+                                    "body": {
+                                        "values": [
+                                            {
+                                                "data": {
+                                                    "text": ""
+                                                },
+                                                "recordId": 0
+                                            }
+                                        ]
+                                    },
+                                    "function": {
+                                        "connectionName": "azureFunctionOperation"
+                                    },
+                                    "method": "POST",
+                                    "queries": {
+                                        "corpAdvFolder": "CORPADV",
+                                        "invoiceFolder": "INVOICE",
+                                        "isLocal": "false",
+                                        "loanNumber": "@{variables('loanNumber')}",
+                                        "step": "1"
+                                    }
+                                },
+                                "runAfter": {
+                                    "Set_variable": [
+                                        "SUCCEEDED"
+                                    ]
+                                },
+                                "type": "Function"
+                            },
+                            "Set_variable": {
+                                "inputs": {
+                                    "name": "loanNumber",
+                                    "value": "@{replace(items('For_each_folder')?['Name'], '/', '')}"
+                                },
+                                "type": "SetVariable"
+                            }
+                        },
+                        "else": {
+                            "actions": {}
+                        },
+                        "expression": {
+                            "and": [
+                                {
+                                    "equals": [
+                                        "@items('For_each_folder')?['IsFolder']",
+                                        true
+                                    ]
+                                }
+                            ]
+                        },
+                        "type": "If"
+                    }
+                },
+                "foreach": "@body('Lists_blobs_(V2)')?['value']",
+                "runAfter": {
+                    "Initialize_variable": [
+                        "SUCCEEDED"
+                    ]
+                },
+                "type": "Foreach"
+            },
+            "Initialize_variable": {
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "loanNumber",
+                            "type": "string"
+                        }
+                    ]
+                },
+                "runAfter": {
+                    "Lists_blobs_(V2)": [
+                        "SUCCEEDED"
+                    ]
+                },
+                "type": "InitializeVariable"
+            },
+            "Lists_blobs_(V2)": {
+                "inputs": {
+                    "host": {
+                        "connection": {
+                            "referenceName": "azureblob-1"
+                        }
+                    },
+                    "method": "get",
+                    "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('AccountNameFromSettings'))}/foldersV2/@{encodeURIComponent(encodeURIComponent('JTJmaW5jb21pbmc='))}",
+                    "queries": {
+                        "nextPageMarker": "",
+                        "useFlatListing": false
+                    }
+                },
+                "metadata": {
+                    "JTJmaW5jb21pbmc=": "/incoming"
+                },
+                "runAfter": {},
+                "type": "ApiConnection"
+            }
+        },
+        "contentVersion": "1.0.0.0",
+        "outputs": {},
+        "triggers": {
+            "Recurrence": {
+                "recurrence": {
+                    "frequency": "Day",
+                    "interval": 1,
+                    "timeZone": "Central Standard Time"
+                },
+                "type": "Recurrence"
+            }
+        }
+    },
+    "kind": "Stateful"
+}
